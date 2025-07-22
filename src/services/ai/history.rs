@@ -13,16 +13,6 @@ use crate::{
 };
 use std::{collections::VecDeque, sync::Arc};
 
-/// Cache configuration optimized for permanent history preservation
-/// 
-/// Strategy:
-/// - History: No TTL (permanent storage as requested by owner)
-/// - Prompts: No TTL (persistent user data)
-/// - Rate limits: 3 seconds (already optimized)
-/// 
-/// Owner's Requirement: "Users don't want chat history to disappear"
-/// Solution: Use summarization to reduce size instead of TTL
-
 async fn history_key(user: Id<UserMarker>) -> String {
     format!("{CACHE_PREFIX}:ai:history:{}", user.get())
 }
