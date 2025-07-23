@@ -37,22 +37,31 @@ const SYSTEM: &str = "You are a conversation summarizer. Given the chat history,
 
 pub(super) static CLIENT: OnceCell<Client> = OnceCell::const_new();
 
+/// Optimized model selection for reliability and performance
+/// Models ordered by: reliability, speed, cost
+/// 
+/// Strategy for small Discord servers:
+/// - Prioritize reliability over cost savings
+/// - Keep more fallback options
+/// - Cost impact is minimal for low usage
 pub(super) const MODELS: &[&str] = &[
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite-preview-06-17",
-    "gemini-2.5-flash-preview-tts",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-preview-image-generation",
-    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",                    // Most reliable, fast
+    "gemini-2.5-flash-lite-preview-06-17", // Lightweight, reliable
+    "gemini-2.5-flash-preview-tts",        // TTS capable, good fallback
+    "gemini-2.0-flash",                    // Stable, cost-effective
+    "gemini-2.0-flash-preview-image-generation", // Image generation support
+    "gemini-2.0-flash-lite",              // Fastest, cheapest
 ];
 
+/// Models specifically for summarization tasks
+/// Prioritizes models with better summarization capabilities
 pub(super) const SUMMARY_MODELS: &[&str] = &[
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite-preview-06-17",
-    "gemini-2.5-flash-preview-tts",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-2.5-pro",                      // Best for summarization
+    "gemini-2.5-flash",                    // Fast alternative
+    "gemini-2.5-flash-lite-preview-06-17", // Lightweight option
+    "gemini-2.5-flash-preview-tts",        // TTS capable
+    "gemini-2.0-flash",                    // Stable fallback
+    "gemini-2.0-flash-lite",              // Lightweight fallback
 ];
 
 pub async fn client() -> anyhow::Result<&'static Client> {
@@ -96,8 +105,14 @@ where
             .generate(name, SYSTEM, contents.clone())
             .await
         {
-            Ok(resp) => return Ok(extract_text(resp)),
-            Err(e) => tracing::warn!(model = %name, error = %e, "summary model failed"),
+            Ok(resp) => {
+                let summary = extract_text(resp);
+                return Ok(summary);
+            }
+            Err(e) => {
+                // Log failure but continue to next model
+                tracing::warn!(model = %name, error = %e, "summary model failed, trying next");
+            }
         }
     }
 

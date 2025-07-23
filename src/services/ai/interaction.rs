@@ -150,10 +150,19 @@ where
                     response = Some(r);
                     break;
                 }
-                Err(e) => tracing::warn!(model = %name, error = %e, "model failed"),
+                Err(e) => {
+                    // Log failure but continue to next model
+                    tracing::warn!(model = %name, error = %e, "model failed, trying next");
+                }
             }
         }
     }
-    let response = response.ok_or_else(|| anyhow::anyhow!("all models failed"))?;
+    
+    // Extract text from successful response
+    let response = response.ok_or_else(|| {
+        tracing::error!("all AI models failed to generate response");
+        anyhow::anyhow!("all models failed")
+    })?;
+    
     Ok(extract_text(response))
 }

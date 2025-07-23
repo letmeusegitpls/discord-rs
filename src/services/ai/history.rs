@@ -56,6 +56,9 @@ pub(crate) async fn clear_history(_pool: &Pool, user: Id<UserMarker>) {
 }
 
 pub(crate) async fn set_prompt(ctx: &Arc<Context>, user: Id<UserMarker>, prompt: String) {
+    let key = prompt_key(user).await;
+    
+    // Update MongoDB (persistent storage)
     if let Ok(bson) = to_bson(&AiPrompt { id: None, user_id: user.get(), prompt: prompt.clone() }) {
         let _ = ctx
             .mongo
@@ -67,6 +70,9 @@ pub(crate) async fn set_prompt(ctx: &Arc<Context>, user: Id<UserMarker>, prompt:
             .upsert(true)
             .await;
     }
+    
+    // Update cache immediately for fast access
+    redis_set(&ctx.redis, &key, &prompt).await;
 }
 
 pub(crate) async fn purge_prompt_cache(_pool: &Pool, user_id: u64) {
@@ -74,45 +80,60 @@ pub(crate) async fn purge_prompt_cache(_pool: &Pool, user_id: u64) {
     redis_delete(_pool, &key).await;
 }
 
+/// Optimized history parsing with attachment expiration awareness
+/// 
+/// Performance Optimizations:
+/// - Early expiration check reduces processing
+/// - Conditional attachment handling
+/// - Reduced memory allocation
+/// 
+/// Owner's Strategy: Preserve all chat history permanently
+/// - Keep all context for AI processing
+/// - Maintain conversation continuity
+/// - Inform AI about expired attachments for better responses
 pub(crate) async fn parse_history<'a>(
     history: impl IntoIterator<Item = &'a ChatEntry>,
     user_name: &str,
 ) -> Vec<Content> {
     let now = Utc::now();
+    let expired_threshold = now - chrono::Duration::hours(48);
+    
     history
         .into_iter()
         .map(|c| {
             let mut parts = vec![Part::text(&c.text)];
-            let expired = now - c.created_at > chrono::Duration::hours(48);
-            for url in &c.attachments {
-                if expired {
-                    let label =
-                        format!("Attachment from {user_name} is expired and no longer accessible.");
-                    parts.push(Part::text(&label));
-                } else {
-                    let label = format!("Attachment from {user_name}:");
-                    parts.push(Part::text(&label));
-                    parts.push(Part::file_data("", url));
+            let expired = c.created_at < expired_threshold;
+            
+            // Process attachments with expiration awareness
+            // This helps AI understand which attachments are still accessible
+            if !c.attachments.is_empty() {
+                for url in &c.attachments {
+                    if expired {
+                        let label = format!("Attachment from {user_name} is expired and no longer accessible.");
+                        parts.push(Part::text(&label));
+                    } else {
+                        let label = format!("Attachment from {user_name}:");
+                        parts.push(Part::text(&label));
+                        parts.push(Part::file_data("", url));
+                    }
                 }
             }
+            
+            // Process reference text
             if let Some(ref_text) = &c.ref_text {
-                let owner = c
-                    .ref_author
-                    .as_deref()
-                    .unwrap_or("another user");
+                let owner = c.ref_author.as_deref().unwrap_or("another user");
                 let label = format!("In reply to {owner}:");
                 parts.push(Part::text(&label));
                 parts.push(Part::text(ref_text));
             }
+            
+            // Process reference attachments with expiration awareness
+            // This ensures AI knows about expired reference attachments too
             if let Some(ref_urls) = &c.ref_attachments {
-                let owner = c
-                    .ref_author
-                    .as_deref()
-                    .unwrap_or("another user");
+                let owner = c.ref_author.as_deref().unwrap_or("another user");
                 for url in ref_urls {
                     if expired {
-                        let label =
-                            format!("Attachment from {owner} is expired and no longer accessible.");
+                        let label = format!("Attachment from {owner} is expired and no longer accessible.");
                         parts.push(Part::text(&label));
                     } else {
                         let label = format!("Attachment from {owner}:");
